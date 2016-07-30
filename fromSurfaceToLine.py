@@ -1,5 +1,7 @@
 import rhinoscriptsyntax as rs
 import Rhino
+import scriptcontext
+from Segmenter import *
 
 # Firstly we split the surface 1 by 1
 # Then we join the curves together
@@ -15,8 +17,7 @@ def fromSurfaceToLine(layerHeight, srf):
     BB = rs.BoundingBox(srf)
     height = float(BB[6][2] - BB[0][2])
     numberOfLayers = int(height / layerHeight) + 1
-    sectionId = []
-    pointList = []
+    curveList = []
     for i in range(0, numberOfLayers):
         corner1 = str(BB[0][0]) + "," + str(BB[0][1]) + "," + str(BB[0][2] + i*layerHeight )
         corner2 = str(BB[2][0]) + "," + str(BB[2][1]) + "," + str(BB[2][2] + i )
@@ -24,13 +25,11 @@ def fromSurfaceToLine(layerHeight, srf):
         layer = rs.LastCreatedObjects()
         rs.UnselectAllObjects()
         rs.SelectObject(layer[0])
-        rs.SelectObject(srf)    
+        rs.SelectObject(srf)
         rs.Command("intersect ")
         rs.DeleteObject(layer)
-        sectionId = rs.LastCreatedObjects()
-        point = [rs.CurveStartPoint(sectionId[0]), rs.CurveEndPoint(sectionId[0])]
-        pointList.append( point )
-    return (numberOfLayers, pointList)
+        curveList.append(rs.LastCreatedObjects()[0])
+    return (curveList)
 
 def joinCurves(listOfNumberOfLayers, listOfPointList, numberOfSurfaces):
 
@@ -80,31 +79,44 @@ def shortestDistance(point, pointList):
         distanceList.remove(min(distanceList))
     return newPointList
 
+# Returns 1 in a point is part of a curve, 0 if not
+def pointInCurve(point, curve):
+    if point == rs.CurveStartPoint(curve) or point == rs.CurveEndPoint(curve):
+        return 1
+    else:
+        return 0
+
 # returns a boolean for whether or not the part to the new point selected interfers with one the curve:
-     # - 0 if it interferes
-     # - 1 if not
+     # - 1 if it interferes
+     # - 0 if not
 # If it does, we just choose another point. 
 # If there's always interference whatever the point chosen, we just go for the shortest distance not to bother too much.
-def overlappingPointList(startPoint, endPoint, curveList):
+def isOverlap(startPoint, endPoint, startCurve, curveList):
     temporaryLine = rs.AddLine(startPoint, endPoint)
-    rs.UnselectAllObjects()
     i = 0
     bool = 0
     while bool == 0:
+        # Once we have done all the curves, time to say there is no overlap whatsoever
         if i == len(curveList):
-            return 1
-        rs.SelectObjects([temporaryLine, curveList[i]])
-        rs.Command("intersect ")
-        if rs.IsPoint(rs.UnselectObject(curveList[i])):
+            rs.DeleteObject(temporaryLine)
+            return 0
+        # below are all the cases that we can encounter
+        if rs.CurveCurveIntersection(temporaryLine, curveList[i]) == None:
+            pass
+        elif len(rs.CurveCurveIntersection(temporaryLine, curveList[i])) == 1:
+            if curveList[i] == startCurve or pointInCurve(endPoint, curveList[i]):
+                pass
+            else:
+                bool = 1
+        else:
             bool = 1
-        rs.UnselectObject(curveList[i])
         i = i + 1
-    return 0
+    return 1
 
 #returns a sorted List of pointList and curveList according to the two criteria
 # !!!!!! With this method, the non extruded distance is not all the time the shortest one.
-def sortLayer2(startPoint, curveList, newPointList, limit):
-    
+def sortPointsWithinLayer(startPoint, curveList, newPointList, limit): # Note: 1st iteration: limit = limit = len(curveList)*2 - 1 and newPointList =[]
+    newPointList.append(startPoint) #we add the to result the first point
     pointList = []
     newCurveList = []
     for i in range(0, len(curveList)):
@@ -114,8 +126,12 @@ def sortLayer2(startPoint, curveList, newPointList, limit):
         # in the process we exclude this tuple from the newly created list
         if startPoint == iStartPoint:
             startPoint = iEndPoint
+            newPointList.append(startPoint) #we add to the result the other point
+            i0 = i
         elif startPoint == iEndPoint:
             startPoint = iStartPoint
+            newPointList.append(startPoint) #we add to the result the other point
+            i0 = i
         else:
             pointList.append(iStartPoint)
             pointList.append(iEndPoint)
@@ -123,107 +139,29 @@ def sortLayer2(startPoint, curveList, newPointList, limit):
     # let's determine the next point
     k = 0
     sortedPointList = shortestDistance(startPoint, pointList)
-    while overlappingPointList(startPoint, sortedPointList[k], newCurveList):
+    while isOverlap(startPoint, sortedPointList[k], curveList[i0], newCurveList) and k < len(newCurveList):
         k += 1
-    if k > len(sortedPointList): # if it interfers with any curve, nervermind, we go for the shortest distance otherwise it becomes too complicated
-        newPointList.append(sortedPointList[0])
-        if len(newPointList) == limit:
+    if k == len(newCurveList): # if it interfers with any curve, nervermind, we go for the shortest distance otherwise it becomes too complicated
+        if len(newPointList) == limit - 1: # -1 because we didn't add the third point (will be done next step)
             return newPointList
         else:
-            newPointList = sortLayer2(sortedPointList[0], newCurveList, newPointList, limit)
+            newPointList = sortPointsWithinLayer(sortedPointList[0], newCurveList, newPointList, limit)
     else:
-        newPointList.append(sortedPointList[k])
-        if len(newPointList) == limit:
+        if len(newPointList) == limit - 1: # -1 because we didn't add the third point (will be done next step)
             return newPointList
         else:
-            newPointList = sortLayer2(sortedPointList[k], newCurveList, newPointList, limit)
+            newP0ointList = sortPointsWithinLayer(sortedPointList[k], newCurveList, newPointList, limit)
 
+def sortPointsBetweenLayers(point, curveList, pointList):
+    sortedPointList = shortestDistance(point, pointList)
+    if point[0] == sortedPointList[0][0] and point[1] == sortedPointList[0][0]:
+        return 0
 
-def sortLayer(startPoint, curveList, newPointList, limit):
-    
-    pointList = []
-    newCurveList = []
-    for i in range(0, len(curveList)):
-        iStartPoint = rs.CurveStartPoint(curveList[i])
-        iEndPoint = rs.CurveEndPoint(curveList[i])
-        # in the following conditions, we determine what the actual start point is, that is the point on the other side of the 1st curve to extrude
-        # in the process we exclude this tuple from the newly created list
-        if startPoint == iStartPoint:
-            startPoint = iEndPoint
-        elif startPoint == iEndPoint:
-            startPoint = iStartPoint
-        else:
-            pointList.append(iStartPoint)
-            pointList.append(iEndPoint)
-            newCurveList.append(curveList[i])
-    # let's determine the next point
-    k = 0
-    sortedPointList = shortestDistance(startPoint, pointList)
-    while overlappingPointList(startPoint, sortedPointList[k], newCurveList):
-        k += 1
-    if k > len(sortedPointList): # if it interfers with any curve, nervermind, we go for the shortest distance otherwise it becomes too complicated
-        newPointList.append(sortedPointList[0])
-        if len(newPointList) == limit:
-            return newPointList
-        else:
-            newPointList = sortLayer2(sortedPointList[0], newCurveList, newPointList, limit)
-    else:
-        newPointList.append(sortedPointList[k])
-        if len(newPointList) == limit:
-            return newPointList
-        else:
-            newPointList = sortLayer2(sortedPointList[k], newCurveList, newPointList, limit)
-
-def sortLayer1():
-    startPoint = rs.GetObject()
-    startPoint = rs.PointCoordinates(startPoint)
-    curveList = []
-    curveList.append(rs.GetObject())
-    curveList.append(rs.GetObject())
-    curveList.append(rs.GetObject())
-    
-    limit = len(curveList) - 1
-    
-    newPointList = []
-    pointList = []
-    newCurveList = []
-    for i in range(0, len(curveList)):
-        iStartPoint = rs.CurveStartPoint(curveList[i])
-        iEndPoint = rs.CurveEndPoint(curveList[i])
-        # in the following conditions, we determine what the actual start point is, that is the point on the other side of the 1st curve to extrude
-        # in the process we exclude this tuple from the newly created list
-        if startPoint == iStartPoint:
-            startPoint = iEndPoint
-        elif startPoint == iEndPoint:
-            startPoint = iStartPoint
-        else:
-            pointList.append(iStartPoint)
-            pointList.append(iEndPoint)
-            newCurveList.append(curveList[i])
-    # let's determine the next point
-    k = 0
-    sortedPointList = shortestDistance(startPoint, pointList)
-    while overlappingPointList(startPoint, sortedPointList[k], newCurveList):
-        k += 1
-    if k > len(sortedPointList): # if it interfers with any curve, nervermind, we go for the shortest distance otherwise it becomes too complicated
-        newPointList.append(sortedPointList[0])
-        if len(newPointList) == limit:
-            return newPointList
-        else:
-            newPointList = sortLayer(sortedPointList[0], newCurveList, newPointList, limit)
-    else:
-        newPointList.append(sortedPointList[k])
-        if len(newPointList) == limit:
-            return newPointList
-        else:
-            newPointList = sortLayer(sortedPointList[k], newCurveList, newPointList, limit)
-
-print sortLayer1()
 
 def selectSurfaces():
     srf = []
     while True:
-        objectId = rs.GetObject("Select the surfaces in the right order", 8)
+        objectId = rs.GetObject("Select the surfaces", 8)
         if not(objectId):
             break
         srf.append(objectId)
@@ -233,17 +171,25 @@ def multipleSrf(layerHeight):
     rs.UnselectAllObjects()
     srf = []
     i = 0
-    listOfPointList = []
     listOfNumberOfLayers = [0]
+    curveList = []
+    newCurveList = []
     
     srf = selectSurfaces()
     
     numberOfSurfaces = len(srf)
     for p in range(0, numberOfSurfaces):
-        (A,B) = fromSurfaceToLine(layerHeight, srf[p])
-        listOfNumberOfLayers.append( A )
-        listOfPointList.append( B )
+        curveList.append(fromSurfaceToLine(layerHeight, srf[p]))
     
-    joinCurves(listOfNumberOfLayers, listOfPointList, numberOfSurfaces)
+    #re-organization of the list of curve
+    for j in range(0, numberOfSurfaces):
+        for i in range(0, len(curveList[j])):
+            newCurveList.append(curveList[j][i])
+    return newCurveList
 
-#multipleSrf(100)
+
+
+#def main():
+    
+
+multipleSrf(10)

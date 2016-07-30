@@ -44,10 +44,6 @@ def firstSegmenter(curve, lineList, curveList, angleMax,deviationMax, width):
     param = rs.CurveClosestPoint(curve, midPoint) #Approximation
     (curve1, curve2) = rs.SplitCurve(curve, param)
     
-    print abs(angle)
-    print abs(endMiddleAngleCurve(curve1, line1))
-    print abs(startMiddleAngleCurve(curve1, line1))
-    
     curveList.append(curve1)
     curveList.append(curve2)
     if rs.CurveLength(curve1) > width*2: # Criteria E
@@ -81,15 +77,19 @@ def firstSegmenter(curve, lineList, curveList, angleMax,deviationMax, width):
     numberOfSegments = len(lineList)
     return (lineList, curveList, numberOfSegments)
 
-def Segmenter(angleMax, deviationMax, width):
-    curve = rs.SelectedObjects()
+def Segmenter(curve, angleMax, deviationMax, width):
     lineList = []
     curveList = []
     
     (lineList, curveList, numberOfSegments) = firstSegmenter(curve, lineList, curveList, angleMax,deviationMax, width)
     
+    result = [ [rs.CurveStartPoint(lineList[0]), 1] ]
+    for i in range(0, len(lineList)-1):
+        pointTuple = [ rs.CurveEndPoint(lineList[i]), 2 ]
+        result.append( pointTuple)
+    result.append( [ rs.CurveEndPoint(lineList[len(lineList)-1]), 1 ] )
+    
     rs.JoinCurves(curveList, True)
-    result = rs.JoinCurves(lineList, True)
+    rs.JoinCurves(lineList, True)
+    
     return result
-
-Segmenter(5, 5, 5)
