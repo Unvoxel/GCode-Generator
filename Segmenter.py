@@ -77,19 +77,19 @@ def firstSegmenter(curve, lineList, curveList, angleMax,deviationMax, width):
     numberOfSegments = len(lineList)
     return (lineList, curveList, numberOfSegments)
 
-def Segmenter(curve, angleMax, deviationMax, width):
+def segmenter(curve, angleMax, deviationMax, width):
     lineList = []
     curveList = []
     
     (lineList, curveList, numberOfSegments) = firstSegmenter(curve, lineList, curveList, angleMax,deviationMax, width)
     
-    result = [ [rs.CurveStartPoint(lineList[0]), 1] ]
+    pointList = [ [rs.CurveStartPoint(lineList[0]), 1] ]
     for i in range(0, len(lineList)-1):
         pointTuple = [ rs.CurveEndPoint(lineList[i]), 2 ]
-        result.append( pointTuple)
-    result.append( [ rs.CurveEndPoint(lineList[len(lineList)-1]), 1 ] )
+        pointList.append( pointTuple)
+    pointList.append( [ rs.CurveEndPoint(lineList[len(lineList)-1]), 1 ] )
     
     rs.JoinCurves(curveList, True)
     rs.JoinCurves(lineList, True)
     
-    return result
+    return pointList
