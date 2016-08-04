@@ -5,6 +5,7 @@
 import rhinoscriptsyntax as rs
 import Rhino
 import scriptcontext
+import copy
 
 
 
@@ -22,6 +23,17 @@ import scriptcontext
 # C is necessary when the curve is overlapping itself
 # D is the width of the extrusion. It is necessary because it is useless to be more precise than the double of the extrusion width
 # NOTE: D is a criteria that stop segmentation whereas A, B and C are criteria that keep going segmentation
+
+
+# Draw a line between pointA and pointB
+# different from rs.AddLine because returns nothing when pointA = pointB
+# Used in display functions
+def drawLine(pointA, pointB):
+    if pointA == pointB:
+        pass
+    else:
+        rs.AddLine(pointA, pointB)
+
 
 # Return angle between the segment and the the line from start point to mid point
 def startMiddleAngleCurve(curve, line):
@@ -42,52 +54,66 @@ def endMiddleAngleCurve(curve, line):
 # Curve deviation is the maximum distance between two curves
 def firstSegmenter(curve, angleMax,deviationMax, width, segmentList):
     #Analyse of the curvature
-    draftLine = rs.AddLine(rs.CurveStartPoint(curve), rs.CurveEndPoint(curve))
+    if rs.CurveStartPoint(curve) == rs.CurveEndPoint(curve): # If it is a closed curve
+        (curve1, curve2) = rs.SplitCurve(curve, rs.CurveClosestPoint(curve, rs.CurveMidPoint(curve)))
+        rs.DeleteObjects(curve)
+        segmentList = firstSegmenter(curve1, angleMax, deviationMax, width, segmentList)
+        segmentList = firstSegmenter(curve2, angleMax, deviationMax, width, segmentList)
+    else:
+        draftLine = rs.AddLine(rs.CurveStartPoint(curve), rs.CurveEndPoint(curve))
     if rs.CurveLength(curve) > width*2: # Criteria D
         curveDeviation = rs.CurveDeviation(curve,draftLine)
         if curveDeviation: #in case curveDeviation doesn't work, we use the distance midpoint of curve and midpoint of draftLine
             if curveDeviation[2] > deviationMax or abs(endMiddleAngleCurve(curve, draftLine)) > angleMax or abs(startMiddleAngleCurve(curve, draftLine)) > angleMax:
-                rs.DeleteObject(draftLine)
+                #rs.DeleteObject(draftLine)
                 (curve1, curve2) = rs.SplitCurve(curve, rs.CurveClosestPoint(curve, rs.CurveMidPoint(curve)))
+                rs.DeleteObjects([curve, draftLine])
                 segmentList = firstSegmenter(curve1, angleMax, deviationMax, width, segmentList)
-                segmentList.append(rs.CurveEndPoint(curve1))
                 segmentList = firstSegmenter(curve2, angleMax, deviationMax, width, segmentList)
-                segmentList.append(rs.CurveEndPoint(curve2))
                 return segmentList
-            else: return segmentList
+            else:
+                segmentList.append(rs.CurveEndPoint(curve))
+                rs.DeleteObjects([curve, draftLine])
+                return segmentList
         elif rs.Distance(rs.CurveMidPoint(curve), rs.CurveMidPoint(draftLine)) > deviationMax or abs(endMiddleAngleCurve(curve, draftLine)) > angleMax or abs(startMiddleAngleCurve(curve, draftLine)) > angleMax:
-            rs.DeleteObject(draftLine)
-            param = rs.CurveClosestPoint(curve, midPoint) #Approximation
-            (curve1, curve2) = rs.SplitCurve(curve, param)
+            #rs.DeleteObject(draftLine)
+            (curve1, curve2) = rs.SplitCurve(curve, rs.CurveClosestPoint(curve, rs.CurveMidPoint(curve)))
+            rs.DeleteObjects([curve, draftLine])
             segmentList = firstSegmenter(curve1, angleMax, deviationMax, width, segmentList)
-            segmentList.append(rs.CurveEndPoint(curve1))
             segmentList = firstSegmenter(curve2, angleMax, deviationMax, width, segmentList)
-            segmentList.append(rs.CurveEndPoint(curve2))
             return segmentList
         else:
+            segmentList.append(rs.CurveEndPoint(curve))
+            rs.DeleteObjects([curve, draftLine])
             return segmentList
     else:
-        rs.DeleteObject(draftLine)
+        segmentList.append(rs.CurveEndPoint(curve))
+        rs.DeleteObjects([curve, draftLine])
         return segmentList
 
 
 
 def segmenter(curve, angleMax, deviationMax, width):
     segmentList = [rs.CurveStartPoint(curve)]
-    
+    # curveCopy = rs.CopyObject(curve) (uncomment is you want to display it)
     segmentList = firstSegmenter(curve, angleMax,deviationMax, width, segmentList)
-#    curvePointList = [rs.CurveStartPoint(segmentList[0])]
-#    for i in range(0, len(segmentList)):
-#        curvePointList.append(rs.CurveEndPoint(segmentList[i]))
-#    return curvePointList
+    return segmentList
 
+
+def segmenterResultDisplay(segmentList):
+    rs.UnselectAllObjects()
+    firstLine = [drawLine(segmentList[0], segmentList[1])]
+    for point in range(1, len(segmentList) - 1):
+        Line = drawLine(segmentList[point], segmentList[point + 1])
+    
 
 
 def test2():
     curve = rs.GetObject()
-    segmenter(curve, 5, 5, 5)
+    segmentList = segmenter(curve, 5, 5, 5)
+    segmenterResultDisplay(segmentList)
 
-test2()
+#test2()
 
 
 ################################   FROM SURFACE TO LINES   ################################
@@ -106,11 +132,11 @@ test2()
 def fromSurfaceToLine(layerHeight, srf):
     BB = rs.BoundingBox(srf)
     height = float(BB[6][2] - BB[0][2])
-    numberOfLayers = int(height / layerHeight) + 1
+    numberOfLayers = int((height - 0.5) / layerHeight) + 1
     curveList = []
     for i in range(0, numberOfLayers):
-        corner1 = str(BB[0][0]) + "," + str(BB[0][1]) + "," + str(BB[0][2] + i*layerHeight )
-        corner2 = str(BB[2][0]) + "," + str(BB[2][1]) + "," + str(BB[2][2] + i )
+        corner1 = str(BB[0][0]) + "," + str(BB[0][1]) + "," + str(BB[0][2] + i*layerHeight + 0.5 ) # +0.5 because it bugs when we interesect right on the bottom edge
+        corner2 = str(BB[2][0]) + "," + str(BB[2][1]) + "," + str(BB[2][2] + i*layerHeight + 0.5 )
         rs.Command("-plane " + corner1 + " " + corner2 + " " )
         layer = rs.LastCreatedObjects()
         rs.UnselectAllObjects()
@@ -129,22 +155,26 @@ def fromSurfaceToLine(layerHeight, srf):
 def shortestDistance(point, pointList):
     newPointList = []
     distanceList = []
-    for i in range(0, len(pointList)):
+    indexList = []
+    numberOfPoints = len(pointList)
+    for i in range(0, numberOfPoints):
         distanceList.append(rs.Distance(point, pointList[i]))
-    jRange = len(pointList)
-    for j in range(0, jRange):
-        newPointList.append(pointList[ distanceList.index(min(distanceList)) ])
-        pointList.remove(pointList[ distanceList.index(min(distanceList)) ])
+    for j in range(0, numberOfPoints):
+        indexMin = distanceList.index(min(distanceList))
+        indexList.append(indexMin)
         distanceList.remove(min(distanceList))
+    for k in range(0, numberOfPoints):
+        newPointList.append(pointList[indexList[k]])
     return newPointList
 
 
-# returns same as above, but with a tuplePoint list as a input
+# returns the shortest distance, but with a tuplePoint list as a input
 def tupleShortestDistance(point, tuplePointList):
-    A = tuplePointList[:][0]
-    pointA =  shortestDistance(point, tuplePointList[:][0])[0]
-    pointB =  shortestDistance(point, tuplePointList[:][1])[0]
-    return shortestDistance(point, [pointA, pointB])[0]
+    pointList = []
+    for i in range(len(tuplePointList)):
+        pointList.append(tuplePointList[i][0])
+        pointList.append(tuplePointList[i][1])
+    return shortestDistance(point, pointList)[0]
 
 
 # Returns 1 in a point is part of a curve, 0 if not
@@ -181,15 +211,23 @@ def isOverlap(startPoint, endPoint, startCurve, curveList):
         else: # 2+ overlap
             bool = 1
         i = i + 1
+    rs.DeleteObject(temporaryLine)
     return 1
 
+
+def fromCurveListToPointList(curveList):
+    pointList = []
+    for i in range(0, len(curveList)):
+        pointList.append(rs.CurveStartPoint(curveList[i]))
+        pointList.append(rs.CurveEndPoint(curveList[i]))
+    return pointList
+ 
 
 # returns a sorted List of pointList and curveList according to the two criteria. It returns all the point of the layer but the last one
 # Each iteration is a new curve
 # !!!!!! With this method, the non extruded distance is not all the time the shortest one.
 # !!! Need to deal with the case when the curve is a closed curve !!!
 def sortPointsWithinLayer(startPoint, curveList, sortedCurveList, newTuplePointList): # Note: 1st iteration: newPointList = []
-    pointList = [] #gather all points but the start tuple (if 2 surfaces then len = 2)
     for i in range(0, len(curveList)):
         iStartPoint = rs.CurveStartPoint(curveList[i])
         iEndPoint = rs.CurveEndPoint(curveList[i])
@@ -202,18 +240,17 @@ def sortPointsWithinLayer(startPoint, curveList, sortedCurveList, newTuplePointL
             newTuplePointList.append([startPoint, iStartPoint]) #We add the first tuple to the result
             sortedCurveList.append(curveList[i]) # And we add the curve associated to that tuple
         else:
-            pointList.append(iStartPoint)
-            pointList.append(iEndPoint)
-    # let's determine the next point
-    k = 0
-    sortedPointList = shortestDistance(startPoint, pointList)
-    while isOverlap(startPoint, sortedPointList[k], sortedCurveList[-1], curveList) and k < len(curveList) -1:
-        k += 1
+            pass
     
-    if len(sortedCurveList) == len(curveList) - 1: # this was the last iteration
-        return [newTuplePointList, sortedPointList[0], sortedCurveList]
-    else: #if not last iteration
-        if k == len(curveList): # if it interfers with any curve, nervermind, we go for the shortest distance otherwise it becomes too complicated
+    if len(sortedCurveList) == len(curveList): # this was the last iteration, endPoint is defined here
+        return [newTuplePointList, newTuplePointList[-1][1], sortedCurveList]
+    else:
+        pointList = fromCurveListToPointList(list(set(curveList) - set(sortedCurveList))) # List of remaining points
+        sortedPointList = shortestDistance(startPoint, pointList)
+        k = 0
+        while isOverlap(startPoint, sortedPointList[k], sortedCurveList[-1], curveList) and k < len(sortedPointList) - 1:
+            k += 1
+        if k == len(sortedPointList) - 1: # if it interfers with any curve, nervermind, we go for the shortest distance otherwise it becomes too complicated
             [newTuplePointList, endPoint, sortedCurveList] = sortPointsWithinLayer(sortedPointList[0], curveList, sortedCurveList, newTuplePointList)
             return [newTuplePointList, endPoint, sortedCurveList]
         else:
@@ -226,9 +263,13 @@ def test():
     curveList.append(rs.GetObject())
     startPoint = rs.CurveStartPoint(curveList[0])
     curveList.append(rs.GetObject())
-    [tuplePointList, endPoint, i0] = sortPointsWithinLayer(startPoint, curveList, [], [])
+    curveList.append(rs.GetObject())
+    curveList.append(rs.GetObject())
+    curveList.append(rs.GetObject())
+    [tuplePointList, endPoint, sortedCurveList] = sortPointsWithinLayer(startPoint, curveList, [], [])
+    sortedCurveList.append(list(set(curveList) - set(sortedCurveList))[0])
     print tuplePointList
-    print endPoint
+    print sortedCurveList
     
     
 #test()
@@ -282,7 +323,6 @@ def numberOfLayersCalculation(curveList):
     # - 1 with the last point
 def fullSortedPointList(startPoint, curveList, objectTuplePointList, objectCurveList, layerNumber, numberOfLayers):
     layerNumber += 1
-    # sortPointsWithinLayer returns all tuple points sorted of a list except the last one
     [layerTuplePointList, endPoint, sortedCurveList] = sortPointsWithinLayer(startPoint, curveList[layerNumber], [], [])
     objectTuplePointList[layerNumber] = layerTuplePointList
     objectCurveList.append(sortedCurveList)
@@ -296,6 +336,18 @@ def fullSortedPointList(startPoint, curveList, objectTuplePointList, objectCurve
         startPoint = sortPointsBetweenLayers(objectTuplePointList[layerNumber][-1][-1], tuplePointList) #End Point of last curve
         fullSortedPointList(startPoint, curveList, objectTuplePointList, objectCurveList, layerNumber, numberOfLayers)
         return objectTuplePointList, objectCurveList, curveList, layerNumber, numberOfLayers
+
+
+# Display all the connections
+def connectionDisplay(objectTuplePointList):
+    numberOfLayers = len(objectTuplePointList)
+    for layer in range(0, numberOfLayers):
+        for curve in range(0, len(objectTuplePointList[layer]) - 1):
+            drawLine(objectTuplePointList[layer][curve][1], objectTuplePointList[layer][curve + 1][0])
+        if layer == numberOfLayers - 1:
+            pass
+        else:
+            drawLine(objectTuplePointList[layer][-1][1], objectTuplePointList[layer + 1][0][0])
 
 
 def multipleSrf(layerHeight):
@@ -325,17 +377,17 @@ def multipleSrf(layerHeight):
     return layerCurveList
 
 
-def reorganisation(curvePointList, tuplePoint):
+def reorganisation(segmentList, tuplePoint):
     newCurvePointList = []
-    if curvePointList[0] == tuplePoint[0] and curvePointList[-1] == tuplePoint[-1]:
-        return curvePointList
-    if curvePointList[0] == tuplePoint[-1] and curvePointList[-1] == tuplePoint[0]:
-        for i in range(1, len(curvePointList) + 1):
-            newCurvePointList.append(curvePointList[-i])
+    if segmentList[0] == tuplePoint[0] and segmentList[-1] == tuplePoint[-1]:
+        return segmentList
+    if segmentList[0] == tuplePoint[-1] and segmentList[-1] == tuplePoint[0]:
+        for i in range(1, len(segmentList) + 1):
+            newCurvePointList.append(segmentList[-i])
         return newCurvePointList
     else:
         print 'NOOOOOO'
-        return curvePointList
+        return segmentList
 
 
 def main():
@@ -361,25 +413,27 @@ def main():
     result = fullSortedPointList(startPoint, curveList, objectTuplePointList, objectCurveList, -1, numberOfLayers)
     objectTuplePointList = result[0]
     objectCurveList = result[1]
+    connectionDisplay(objectTuplePointList)
     
     # Segmentation + voxeled GCode
     for layerNumber in range(0, len(curveList)): #For each layer of 1 object
-        for curveNumber in range(0, len(curveList[layerNumber])): # For each curve of 1 layer
-            curvePointList = segmenter(curveList[layerNumber][curveNumber], angleMax, deviationMax, layerWidth)
-            curvePointList = reorganisation(curvePointList, objectTuplePointList[layerNumber][curveNumber])
-            for point in range(0, len(curvePointList) - 1): # For each segment of 1 curve
+        for curveNumber in range(0, len(objectCurveList[layerNumber])): # For each curve of 1 layer
+            segmentList = segmenter(objectCurveList[layerNumber][curveNumber], angleMax, deviationMax, layerWidth)
+            segmenterResultDisplay(segmentList)
+            segmentList = reorganisation(segmentList, objectTuplePointList[layerNumber][curveNumber])
+            for point in range(0, len(segmentList) - 1): # For each segment of 1 curve
                 voxeledStep.append("G1")
-                a = curvePointList[point]
-                voxeledStep.append(curvePointList[point][2])
-                voxeledStep.append(curvePointList[point][0])
-                voxeledStep.append(curvePointList[point][1])
+                a = segmentList[point]
+                voxeledStep.append(segmentList[point][2])
+                voxeledStep.append(segmentList[point][0])
+                voxeledStep.append(segmentList[point][1])
                 voxeledStep.append(999999999)
                 voxeledStep.append(999999999)
                 voxeledGCode.append(voxeledStep)
             voxeledStep.append("G1")
-            voxeledStep.append(curvePointList[point][2])
-            voxeledStep.append(curvePointList[point][0])
-            voxeledStep.append(curvePointList[point][1])
+            voxeledStep.append(segmentList[point][2])
+            voxeledStep.append(segmentList[point][0])
+            voxeledStep.append(segmentList[point][1])
             voxeledStep.append(0)
             voxeledStep.append(999999999)
             voxeledGCode.append(voxeledStep)
@@ -387,14 +441,7 @@ def main():
     # Unvoxeled GCode
 
 
-
-#    for i in range(0, len(curveList)):
-#        layerPointList.append(pointList) #This is a list of a list of a list of points (a list of a list of curves ; a list of layers since layers = list of curves)
-#        for j in range(0, len(curveList[i]):
-#            segmentPointList = segmenter(curveList[i][j], 5, 5, layerWidth #by default deviationmax = 5 and anglemax = 5 ; this is a pointList of the segments
-#            curvePointList.append(segmentPointList): #This is a list of a list of points (list of curves)
-
-#main()
+main()
 
 def checkSamePoint(voxeledGCode):
     for i in range(voxeledGCode):
